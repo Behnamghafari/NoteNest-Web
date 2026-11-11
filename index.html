@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f5f2eb">
+  <meta name="description" content="NoteNest — دفترچه یادداشت شخصی">
+  <title>NoteNest | دفترچه یادداشت</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <section class="vault-gate" id="vaultGate" aria-labelledby="vaultGateTitle">
+    <div class="vault-card"><div class="brand-mark vault-brand">N</div><h1 id="vaultGateTitle">ساخت خزانهٔ امن</h1>
+      <p id="vaultGateDescription">یادداشت‌ها فقط به‌صورت رمزگذاری‌شده روی این دستگاه ذخیره می‌شوند.</p>
+      <p class="vault-error" id="vaultError" role="alert" hidden></p>
+      <form id="vaultSetupForm" class="vault-form">
+        <label for="vaultPassword">رمز عبور خزانه</label><input id="vaultPassword" type="password" minlength="10" autocomplete="new-password" required>
+        <label for="vaultPasswordConfirm">تکرار رمز عبور</label><input id="vaultPasswordConfirm" type="password" minlength="10" autocomplete="new-password" required>
+        <button class="vault-primary" id="vaultSetupButton" type="submit">ساخت خزانه و کلید بازیابی</button>
+      </form>
+      <section id="vaultRecoveryStep" hidden><div class="recovery-code" id="recoveryCode" dir="ltr"></div>
+        <button type="button" class="vault-secondary" id="copyRecoveryCode">کپی کلید بازیابی</button><p id="recoveryHint" class="recovery-hint"></p>
+        <form id="confirmRecoveryForm" class="vault-form"><label for="recoveryConfirmation">۶ نویسهٔ پایانی کلید را وارد کن</label>
+          <input id="recoveryConfirmation" type="text" dir="ltr" autocomplete="off" maxlength="6" required>
+          <button class="vault-primary" id="confirmRecoveryButton" type="submit">تأیید و فعال‌سازی خزانه</button></form>
+      </section>
+      <form id="vaultUnlockForm" class="vault-form" hidden>
+        <input id="vaultSecret" type="password" autocomplete="current-password" placeholder="رمز عبور" required>
+        <input id="vaultRecoverySecret" type="text" dir="ltr" autocomplete="off" placeholder="کلید بازیابی" hidden>
+        <button class="vault-primary" id="vaultUnlockButton" type="submit">باز کردن خزانه</button>
+        <button class="vault-link" id="toggleRecoveryUnlock" type="button">ورود با کلید بازیابی</button>
+      </form>
+      <p class="vault-footnote">رمز عبور و کلید اصلی روی سرور ذخیره نمی‌شوند. فراموشی هر دو به معنی از دست‌رفتن دسترسی به یادداشت‌هاست.</p>
+    </div>
+  </section>
+  <div class="app-shell" hidden>
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="./" aria-label="NoteNest">
+        <span class="brand-mark">N</span><span><strong>NoteNest</strong><small>دفترچه یادداشت</small></span>
+      </a>
+      <button class="new-note" id="newNote"><span>＋</span> یادداشت جدید</button>
+      <nav class="main-nav" aria-label="منوی اصلی">
+        <button class="nav-item active" data-filter="all"><span>▤</span> همه یادداشت‌ها <kbd id="allCount">0</kbd></button>
+        <button class="nav-item" data-filter="favorite"><span>☆</span> علاقه‌مندی‌ها <kbd id="favoriteCount">0</kbd></button>
+      </nav>
+      <div class="side-heading"><span>پوشه‌ها</span><button id="addFolder" aria-label="افزودن پوشه">＋</button></div>
+      <div id="folderList" class="folder-list"></div>
+      <div class="sidebar-bottom">
+        <div class="local-status"><span class="status-dot"></span><span>ذخیره روی همین دستگاه</span></div>
+        <button class="nav-item" id="themeToggle"><span>◐</span> تغییر پوسته</button><button class="nav-item" id="lockVault"><span>⌑</span> قفل خزانه</button>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="باز کردن منو">☰</button>
+        <div class="page-heading"><h1 id="pageTitle">همه یادداشت‌ها</h1><p id="pageSubtitle">فکرهایت را اینجا نگه دار.</p></div>
+        <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="جست‌وجو در یادداشت‌ها..." autocomplete="off"></label>
+        <button class="icon-button" id="topNewNote" aria-label="یادداشت جدید">＋</button>
+      </header>
+      <section class="content-area">
+        <div class="notes-toolbar"><span id="resultCount">۰ یادداشت</span><select id="sortSelect" aria-label="مرتب‌سازی"><option value="updated">آخرین تغییر</option><option value="created">قدیمی‌ترین</option><option value="title">عنوان</option></select></div>
+        <div id="notesGrid" class="notes-grid"></div>
+        <div id="emptyState" class="empty-state"><div class="empty-icon">✎</div><h2>هنوز یادداشتی اینجا نیست</h2><p>اولین یادداشتت را بساز؛ بقیه‌اش با تو.</p><button class="new-note" id="emptyNewNote">＋ ساخت یادداشت</button></div>
+      </section>
+    </main>
+  </div>
+  <div class="editor-backdrop" id="editorBackdrop" hidden>
+    <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editorHeading">
+      <header class="editor-header">
+        <button class="icon-button subtle" id="closeEditor" aria-label="بستن">×</button>
+        <div class="save-state" id="saveState">ذخیره‌شده</div>
+        <div class="editor-actions"><button class="icon-button subtle" id="favoriteNote" aria-label="علاقه‌مندی">☆</button><button class="danger-button" id="deleteNote">حذف</button></div>
+      </header>
+      <div class="editor-body">
+        <div class="editor-meta"><span id="editorFolderLabel">بدون پوشه</span><select id="noteFolder" aria-label="انتقال به پوشه"><option value="">بدون پوشه</option></select></div>
+        <label class="sr-only" for="noteTitle">عنوان یادداشت</label>
+        <input id="noteTitle" class="title-input" placeholder="عنوان یادداشت..." maxlength="180">
+        <label class="sr-only" for="noteContent">متن یادداشت</label>
+        <textarea id="noteContent" class="content-input" placeholder="از اینجا بنویس..."></textarea>
+        <footer class="editor-footer"><span>متن فارسی و English در کنار هم</span><span id="wordCount">۰ کلمه</span></footer>
+      </div>
+    </section>
+  </div>
+  <dialog class="action-dialog" id="actionDialog">
+    <form method="dialog" id="actionForm">
+      <h2 id="dialogTitle">ساخت پوشه</h2>
+      <p id="dialogMessage">نام پوشه را وارد کن.</p>
+      <input id="dialogInput" maxlength="60" autocomplete="off" placeholder="نام پوشه">
+      <div class="dialog-actions"><button value="cancel" class="dialog-cancel">انصراف</button><button value="confirm" class="dialog-confirm">تأیید</button></div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
