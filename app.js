@@ -214,7 +214,7 @@ import * as VaultCrypto from "./vault-crypto.js";
     $("confirmRecoveryButton").disabled=true;
     try{
       vaultKey=pendingSetup.key;passwordWrappedKey=pendingSetup.wrappedPassword;recoveryWrappedKey=pendingSetup.wrappedRecovery;
-      await writeEncryptedVault();localStorage.removeItem(LEGACY_STORAGE_KEY);pendingSetup=null;
+      await writeEncryptedVault();pendingSetup=JSON.parse(localStorage.getItem(VAULT_STORAGE_KEY));localStorage.removeItem(LEGACY_STORAGE_KEY);
       $("vaultRecoveryStep").hidden=true;revealApp();showToast("خزانهٔ امن ساخته شد.");
     }catch(error){vaultKey=null;gateError("ذخیرهٔ خزانه انجام نشد: "+error.message);}
     finally{$("confirmRecoveryButton").disabled=false;}
