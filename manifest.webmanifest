@@ -1,0 +1,11 @@
+{
+  "name": "NoteNest | دفترچه یادداشت",
+  "short_name": "NoteNest",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f2eb",
+  "theme_color": "#f5f2eb"
+}
