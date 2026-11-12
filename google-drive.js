@@ -107,6 +107,20 @@ export async function ensureNoteNestFolder() {
   }).then(r => r.json());
 }
 
+export async function ensureNoteNestFilesFolder(parentFolderId) {
+  if (!parentFolderId) throw new TypeError("شناسه پوشهٔ اصلی معتبر نیست.");
+  const token = getAccessToken();
+  const escapedParentId = parentFolderId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const q = encodeURIComponent("name = 'files' and mimeType = '" + FOLDER_MIME + "' and '" + escapedParentId + "' in parents and trashed = false");
+  const found = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,mimeType,parents)&pageSize=100`, token).then(r => r.json());
+  if (found.files?.length) return found.files[0];
+  return request(`${DRIVE_API}/files?fields=id,name,mimeType,parents`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "files", mimeType: FOLDER_MIME, parents: [parentFolderId] })
+  }).then(r => r.json());
+}
+
 export async function listNoteNestFiles(folderId) {
   const token = getAccessToken();
   const q = encodeURIComponent("'" + folderId.replace(/'/g, "\\'") + "' in parents and trashed = false");
