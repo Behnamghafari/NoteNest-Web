@@ -27,7 +27,7 @@ const fixtureBatch = () => ({
 const decode64 = (value) => Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/") +
   "=".repeat((4 - value.length % 4) % 4)), (character) => character.charCodeAt(0));
 
-test("decrypts the fixed AES-256-GCM v1 wire fixture with the exact Android AAD", async () => {
+// Deterministic known-answer fixture produced independently with Node/OpenSSL AES-256-GCM;\n// it verifies the shared byte-level contract and exact Android AAD, not an Android-generated artifact.\ntest("decrypts a fixed AES-256-GCM v1 known-answer fixture with the exact Android AAD", async () => {
   assert.equal(AAD, "NoteNest:SyncBatch:v1");
   const envelope = {
     protocolVersion: 1,
