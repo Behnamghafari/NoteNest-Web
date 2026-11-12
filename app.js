@@ -267,8 +267,9 @@ import * as GoogleDrive from "./google-drive.js";
         throw new Error("این خزانه به حساب گوگل دیگری متصل است. برای جلوگیری از جابه‌جایی داده‌ها، اتصال مسدود شد.");
       }
       if (!existingBinding) localStorage.setItem(DRIVE_ACCOUNT_KEY, account.accountFingerprint);
-      const folder = await GoogleDrive.ensureNoteNestFolder();
-      driveFolderId = folder.id;
+      const rootFolder = await GoogleDrive.ensureNoteNestFolder();
+      const filesFolder = await GoogleDrive.ensureNoteNestFilesFolder(rootFolder.id);
+      driveFolderId = filesFolder.id;
       const files = await GoogleDrive.listNoteNestFiles(driveFolderId);
       const vaultExists = files.some(file => file.name === "vault-v1.json");
       const batches = files.filter(file => file.name.startsWith("notenest-sync-v1-")).length;
