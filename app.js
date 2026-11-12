@@ -2,6 +2,7 @@ import * as VaultCrypto from "./vault-crypto.js";
 import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPES } from "./drive-config.js";
 import * as GoogleDrive from "./google-drive.js";
 import * as SyncBatch from "./vault-sync-batch.js";
+import * as SessionVault from "./session-vault.js";
 
 (() => {
   "use strict";
@@ -59,20 +60,47 @@ import * as SyncBatch from "./vault-sync-batch.js";
     $("vaultUnlockForm").hidden=true;
     $("vaultRecoveryStep").hidden=true;
     $("vaultGateTitle").textContent="اتصال به دفترچهٔ گوگل‌درایو";
-    $("vaultGateDescription").textContent="این نسخه فقط اطلاعات موجود در Google Drive را می‌خواند؛ برای شروع متصل شو.";
+    $("vaultGateDescription").textContent="در حال بازیابی نشست قبلی…";
     $("driveConnect").hidden=false;
     if("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./sw.js").catch(()=>{});
+    if (localStorage.getItem(DRIVE_ACCOUNT_KEY)) {
+      $("driveConnect").disabled = true;
+      $("driveConnect").textContent = "در حال اتصال دوباره…";
+      try {
+        await loadDriveVault({ silent: true });
+      } catch (error) {
+        $("driveConnect").hidden = false;
+        $("driveConnect").disabled = false;
+        $("driveConnect").textContent = "اتصال دوباره به گوگل‌درایو";
+        $("vaultGateDescription").textContent = "برای ادامه، اتصال گوگل را دوباره تأیید کن.";
+        showToast(error?.message || "بازیابی اتصال گوگل انجام نشد.");
+      }
+    }
   }
-  async function unlockVault(secret){
-    const e=pendingSetup;
-    const key=unlockUsesRecovery?await VaultCrypto.unwrapVaultKeyWithRecoveryKey(e.recoveryWrappedKey,secret):await VaultCrypto.unwrapVaultKeyWithPassword(e.passwordWrappedKey,secret);
+  async function openVaultWithKey(key) {
+    const e = pendingSetup;
     try {
-      const snapshot=await VaultCrypto.decryptSnapshotDocument(new TextEncoder().encode(JSON.stringify(e)),key);
+      const snapshot = await VaultCrypto.decryptSnapshotDocument(new TextEncoder().encode(JSON.stringify(e)), key);
       applySnapshot(snapshot);
       await applyRemoteBatches(key);
-      vaultKey=key;passwordWrappedKey=e.passwordWrappedKey;recoveryWrappedKey=e.recoveryWrappedKey;
-      $("vaultSecret").value="";$("vaultRecoverySecret").value="";revealApp();
-    } catch(error) { key.fill(0); throw error; }
+      vaultKey = key;
+      passwordWrappedKey = e.passwordWrappedKey;
+      recoveryWrappedKey = e.recoveryWrappedKey;
+      await SessionVault.storeSessionVaultKey(key);
+      $("vaultSecret").value = "";
+      $("vaultRecoverySecret").value = "";
+      revealApp();
+    } catch (error) {
+      key.fill(0);
+      throw error;
+    }
+  }
+  async function unlockVault(secret) {
+    const e = pendingSetup;
+    const key = unlockUsesRecovery
+      ? await VaultCrypto.unwrapVaultKeyWithRecoveryKey(e.recoveryWrappedKey, secret)
+      : await VaultCrypto.unwrapVaultKeyWithPassword(e.passwordWrappedKey, secret);
+    return openVaultWithKey(key);
   }
   function id() { return crypto.randomUUID(); }
   function dateLabel(ts) {
@@ -254,6 +282,7 @@ import * as SyncBatch from "./vault-sync-batch.js";
     if(!$("editorBackdrop").hidden) closeEditor();
     await saveQueue;
     vaultKey?.fill(0);vaultKey=null;state.notes=[];state.folders=[];
+    await SessionVault.clearSessionVaultKey();
     document.querySelector(".app-shell").hidden=true;$("vaultGate").hidden=false;showUnlock();
     $("vaultSecret").value="";$("vaultRecoverySecret").value="";
   });
@@ -348,36 +377,59 @@ import * as SyncBatch from "./vault-sync-batch.js";
     const bound = localStorage.getItem(DRIVE_ACCOUNT_KEY);
     button.textContent = bound ? "☁ اتصال دوباره به گوگل درایو" : "☁ اتصال به گوگل درایو";
   }
+  async function loadDriveVault({ silent = false } = {}) {
+    if (!GOOGLE_CLIENT_ID) throw new Error("شناسه OAuth وب در drive-config.js تنظیم نشده است.");
+    const account = await GoogleDrive.connectGoogleDrive(
+      GOOGLE_CLIENT_ID,
+      GOOGLE_DRIVE_SCOPES,
+      { prompt: silent ? "none" : "consent" }
+    );
+    const existingBinding = localStorage.getItem(DRIVE_ACCOUNT_KEY);
+    if (existingBinding && existingBinding !== account.accountFingerprint) {
+      GoogleDrive.disconnectGoogleDrive();
+      throw new Error("این خزانه به حساب گوگل دیگری متصل است؛ اتصال برای محافظت از داده‌ها متوقف شد.");
+    }
+    if (!existingBinding) localStorage.setItem(DRIVE_ACCOUNT_KEY, account.accountFingerprint);
+    const rootFolder = await GoogleDrive.findNoteNestFolder();
+    if (!rootFolder) throw new Error("پوشهٔ NoteNest در ریشهٔ گوگل‌درایو پیدا نشد.");
+    driveFolderId = rootFolder.id;
+    driveFiles = await GoogleDrive.listNoteNestFiles(driveFolderId);
+    const vaultFile = driveFiles.find(file => file.name === "vault-v1.json");
+    if (!vaultFile) throw new Error("فایل vault-v1.json در پوشهٔ NoteNest پیدا نشد.");
+    const vaultBytes = new Uint8Array(await GoogleDrive.downloadEncryptedFile(vaultFile.id));
+    pendingSetup = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(vaultBytes));
+    VaultCrypto.validateEnvelope(pendingSetup);
+    $("driveConnect").hidden = true;
+    $("vaultGateTitle").textContent = "باز کردن یادداشت‌های Drive";
+    $("vaultGateDescription").textContent = driveFiles.filter(f => f.name.startsWith("notenest-sync-v1-")).length +
+      " بستهٔ همگام‌سازی پیدا شد.";
+    const sessionKey = await SessionVault.restoreSessionVaultKey();
+    if (sessionKey) {
+      try {
+        await openVaultWithKey(sessionKey);
+        showToast("نشست قبلی بازیابی شد؛ نیازی به ورود دوباره نیست.");
+        return;
+      } catch (error) {
+        await SessionVault.clearSessionVaultKey();
+        showUnlock();
+        gateError("بازیابی نشست قبلی ناموفق بود؛ دوباره رمز خزانه را وارد کن.");
+      }
+    } else {
+      showUnlock();
+    }
+  }
   $("driveConnect").addEventListener("click", async () => {
     const button = $("driveConnect");
     button.disabled = true;
     try {
-      if (!GOOGLE_CLIENT_ID) throw new Error("ابتدا OAuth Client ID وب را در فایل drive-config.js قرار بده.");
-      const account = await GoogleDrive.connectGoogleDrive(GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPES);
-      const existingBinding = localStorage.getItem(DRIVE_ACCOUNT_KEY);
-      if (existingBinding && existingBinding !== account.accountFingerprint) {
-        GoogleDrive.disconnectGoogleDrive();
-        throw new Error("این خزانه به حساب گوگل دیگری متصل است. برای جلوگیری از جابه‌جایی داده‌ها، اتصال مسدود شد.");
-      }
-      if (!existingBinding) localStorage.setItem(DRIVE_ACCOUNT_KEY, account.accountFingerprint);
-      const rootFolder = await GoogleDrive.findNoteNestFolder();
-      if(!rootFolder)throw new Error("پوشهٔ NoteNest در ریشهٔ گوگل‌درایو پیدا نشد؛ این نسخه پوشه‌ای ایجاد نمی‌کند.");
-      driveFolderId = rootFolder.id;
-      driveFiles = await GoogleDrive.listNoteNestFiles(driveFolderId);
-      const vaultFile=driveFiles.find(file=>file.name==="vault-v1.json");
-      if(!vaultFile)throw new Error("فایل vault-v1.json پیدا نشد. بسته‌های همگام‌سازی به‌تنهایی برای بازکردن کلید رمزنگاری کافی نیستند.");
-      const vaultBytes=new Uint8Array(await GoogleDrive.downloadEncryptedFile(vaultFile.id));
-      pendingSetup=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(vaultBytes));
-      VaultCrypto.validateEnvelope(pendingSetup);
-      showUnlock();
-      $("driveConnect").hidden=true;
-      $("vaultGateTitle").textContent="باز کردن یادداشت‌های Drive";
-      $("vaultGateDescription").textContent=driveFiles.filter(f=>f.name.startsWith("notenest-sync-v1-")).length+" بستهٔ همگام‌سازی پیدا شد. رمز خزانه یا کلید بازیابی را وارد کن.";
-      showToast("فایل خزانه و بسته‌های همگام‌سازی دریافت شد.");
+      await loadDriveVault({ silent: false });
+      if (!$("vaultUnlockForm").hidden) showToast("اتصال برقرار شد؛ خزانه آمادهٔ بازشدن است.");
     } catch (error) {
-      showToast(error?.message || "اتصال به گوگل درایو ناموفق بود.");
+      showToast(error?.message || "اتصال به گوگل‌درایو ناموفق بود.");
       updateDriveButton();
-    } finally { button.disabled = false; }
+    } finally {
+      button.disabled = false;
+    }
   });
   updateDriveButton();
   $("newNote").hidden=true;$("topNewNote").hidden=true;$("emptyNewNote").hidden=true;$("addFolder").hidden=true;$("favoriteNote").hidden=true;$("deleteNote").hidden=true;$("noteTitle").readOnly=true;$("noteContent").readOnly=true;$("noteFolder").disabled=true;
