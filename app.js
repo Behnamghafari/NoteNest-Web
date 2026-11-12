@@ -110,7 +110,7 @@ import * as SyncBatch from "./vault-sync-batch.js";
     $("resultCount").textContent = fa.format(notes.length) + " یادداشت";
     $("emptyState").hidden = notes.length > 0;
     notes.forEach(note => {
-      const card=document.createElement("article");card.className="note-card";card.tabIndex=0;card.setAttribute("role","button");card.setAttribute("aria-label","ویرایش "+(note.title||"یادداشت بدون عنوان"));
+      const card=document.createElement("article");card.className="note-card";card.tabIndex=0;card.setAttribute("role","button");card.setAttribute("aria-label","مشاهدهٔ "+(note.title||"یادداشت بدون عنوان"));
       const title=document.createElement("h3");title.textContent=note.title||"بدون عنوان";
       const preview=document.createElement("p");preview.className="note-preview";preview.textContent=note.content||"یادداشتی بدون متن";
       const footer=document.createElement("footer");const folder=document.createElement("span");folder.className="note-folder";folder.textContent=folderName(note.folderId);
