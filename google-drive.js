@@ -50,7 +50,7 @@ async function request(url, token, options = {}) {
   return response;
 }
 
-export async function connectGoogleDrive(clientId, scopes) {
+export async function connectGoogleDrive(clientId, scopes, { prompt = "consent" } = {}) {
   if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) {
     throw new Error("شناسه OAuth وب معتبر نیست. Client ID را در drive-config.js تنظیم کن.");
   }
@@ -76,7 +76,7 @@ export async function connectGoogleDrive(clientId, scopes) {
       },
       error_callback: error => reject(new Error(error.message || "ورود گوگل لغو شد."))
     });
-    tokenClient.requestAccessToken({ prompt: "consent" });
+    tokenClient.requestAccessToken({ prompt });
   });
 }
 
