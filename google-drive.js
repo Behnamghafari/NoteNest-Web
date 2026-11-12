@@ -1,6 +1,5 @@
 const GOOGLE_IDENTITY_SCRIPT = "https://accounts.google.com/gsi/client";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
-const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
 const USERINFO_API = "https://openidconnect.googleapis.com/v1/userinfo";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 let scriptPromise;
@@ -95,30 +94,12 @@ export function disconnectGoogleDrive() {
   tokenClient = null;
 }
 
-export async function ensureNoteNestFolder() {
+export async function findNoteNestFolder() {
   const token = getAccessToken();
   const q = encodeURIComponent("name = 'NoteNest' and mimeType = '" + FOLDER_MIME + "' and 'root' in parents and trashed = false");
   const found = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,mimeType)&pageSize=100`, token).then(r => r.json());
   if (found.files?.length) return found.files[0];
-  return request(`${DRIVE_API}/files?fields=id,name,mimeType`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "NoteNest", mimeType: FOLDER_MIME, parents: ["root"] })
-  }).then(r => r.json());
-}
-
-export async function ensureNoteNestFilesFolder(parentFolderId) {
-  if (!parentFolderId) throw new TypeError("شناسه پوشهٔ اصلی معتبر نیست.");
-  const token = getAccessToken();
-  const escapedParentId = parentFolderId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-  const q = encodeURIComponent("name = 'files' and mimeType = '" + FOLDER_MIME + "' and '" + escapedParentId + "' in parents and trashed = false");
-  const found = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,mimeType,parents)&pageSize=100`, token).then(r => r.json());
-  if (found.files?.length) return found.files[0];
-  return request(`${DRIVE_API}/files?fields=id,name,mimeType,parents`, token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "files", mimeType: FOLDER_MIME, parents: [parentFolderId] })
-  }).then(r => r.json());
+  return null;
 }
 
 export async function listNoteNestFiles(folderId) {
@@ -140,15 +121,5 @@ export async function downloadEncryptedFile(fileId) {
   return request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, token).then(r => r.arrayBuffer());
 }
 
-export async function uploadEncryptedFile(folderId, fileName, bytes) {
-  if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError("فایل رمزنگاری‌شده خالی است.");
-  const token = getAccessToken();
-  const boundary = "notenest-" + crypto.randomUUID();
-  const metadata = { name: fileName, mimeType: "application/json", parents: [folderId] };
-  const prefix = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`;
-  const suffix = `\r\n--${boundary}--`;
-  const body = new Blob([prefix, bytes, suffix], { type: `multipart/related; boundary=${boundary}` });
-  return request(`${UPLOAD_API}/files?uploadType=multipart&fields=id,name,modifiedTime,parents`, token, {
-    method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body
-  }).then(r => r.json());
-}
+
+export function getReadOnlyAccessToken() { return getAccessToken(); }
