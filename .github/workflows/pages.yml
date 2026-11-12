@@ -36,8 +36,6 @@ jobs:
         run: node --test vault-crypto.test.js
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
