@@ -386,7 +386,7 @@ import * as SessionVault from "./session-vault.js";
     const account = await GoogleDrive.connectGoogleDrive(
       GOOGLE_CLIENT_ID,
       GOOGLE_DRIVE_SCOPES,
-      { prompt: "consent", reuseSession: true, allowInteractive: !silent }
+      { prompt: "", reuseSession: true, allowInteractive: !silent }
     );
     const existingBinding = localStorage.getItem(DRIVE_ACCOUNT_KEY);
     if (existingBinding && existingBinding !== account.accountFingerprint) {
