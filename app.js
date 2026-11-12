@@ -1,4 +1,6 @@
 import * as VaultCrypto from "./vault-crypto.js";
+import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPES } from "./drive-config.js";
+import * as GoogleDrive from "./google-drive.js";
 
 (() => {
   "use strict";
@@ -245,5 +247,41 @@ import * as VaultCrypto from "./vault-crypto.js";
     document.querySelector(".app-shell").hidden=true;$("vaultGate").hidden=false;showUnlock();
     $("vaultSecret").value="";$("vaultRecoverySecret").value="";
   });
+
+  const DRIVE_ACCOUNT_KEY = "notenest.web.drive-account.v1";
+  let driveFolderId = null;
+  function updateDriveButton() {
+    const button = $("driveConnect");
+    const bound = localStorage.getItem(DRIVE_ACCOUNT_KEY);
+    button.textContent = bound ? "☁ اتصال دوباره به گوگل درایو" : "☁ اتصال به گوگل درایو";
+  }
+  $("driveConnect").addEventListener("click", async () => {
+    const button = $("driveConnect");
+    button.disabled = true;
+    try {
+      if (!GOOGLE_CLIENT_ID) throw new Error("ابتدا OAuth Client ID وب را در فایل drive-config.js قرار بده.");
+      const account = await GoogleDrive.connectGoogleDrive(GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPES);
+      const existingBinding = localStorage.getItem(DRIVE_ACCOUNT_KEY);
+      if (existingBinding && existingBinding !== account.accountFingerprint) {
+        GoogleDrive.disconnectGoogleDrive();
+        throw new Error("این خزانه به حساب گوگل دیگری متصل است. برای جلوگیری از جابه‌جایی داده‌ها، اتصال مسدود شد.");
+      }
+      if (!existingBinding) localStorage.setItem(DRIVE_ACCOUNT_KEY, account.accountFingerprint);
+      const rootFolder = await GoogleDrive.ensureNoteNestFolder();
+      const filesFolder = await GoogleDrive.ensureNoteNestFilesFolder(rootFolder.id);
+      driveFolderId = filesFolder.id;
+      const files = await GoogleDrive.listNoteNestFiles(driveFolderId);
+      const vaultExists = files.some(file => file.name === "vault-v1.json");
+      const batches = files.filter(file => file.name.startsWith("notenest-sync-v1-")).length;
+      showToast(vaultExists || batches ? `اتصال برقرار شد؛ ${batches} بستهٔ همگام‌سازی پیدا شد.` : "اتصال برقرار شد؛ پوشهٔ NoteNest آماده است.");
+      button.textContent = "☁ متصل به گوگل درایو";
+      button.title = vaultExists ? "خزانهٔ رمزنگاری‌شده در Drive موجود است." : "پوشه آماده است؛ هنوز خزانه‌ای پیدا نشد.";
+    } catch (error) {
+      showToast(error?.message || "اتصال به گوگل درایو ناموفق بود.");
+      updateDriveButton();
+    } finally { button.disabled = false; }
+  });
+  updateDriveButton();
+
   bootstrap();
 })();

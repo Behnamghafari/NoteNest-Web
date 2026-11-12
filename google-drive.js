@@ -1,0 +1,154 @@
+const GOOGLE_IDENTITY_SCRIPT = "https://accounts.google.com/gsi/client";
+const DRIVE_API = "https://www.googleapis.com/drive/v3";
+const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
+const USERINFO_API = "https://openidconnect.googleapis.com/v1/userinfo";
+const FOLDER_MIME = "application/vnd.google-apps.folder";
+let scriptPromise;
+let tokenClient;
+let activeToken = null;
+let tokenExpiresAt = 0;
+
+function loadGoogleIdentity() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  if (scriptPromise) return scriptPromise;
+  scriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-notenest-google-identity="true"]');
+    const script = existing || document.createElement("script");
+    script.src = GOOGLE_IDENTITY_SCRIPT;
+    script.async = true;
+    script.defer = true;
+    script.dataset.notenestGoogleIdentity = "true";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("بارگذاری سرویس ورود گوگل ناموفق بود."));
+    if (!existing) document.head.append(script);
+  });
+  return scriptPromise;
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function request(url, token, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) }
+  });
+  if (!response.ok) {
+    let detail = "";
+    try { detail = (await response.json()).error?.message || ""; } catch {}
+    if (response.status === 401) { activeToken = null; tokenExpiresAt = 0; }
+    throw new Error(`Google Drive: HTTP ${response.status}${detail ? " — " + detail : ""}`);
+  }
+  return response;
+}
+
+export async function connectGoogleDrive(clientId, scopes) {
+  if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) {
+    throw new Error("شناسه OAuth وب معتبر نیست. Client ID را در drive-config.js تنظیم کن.");
+  }
+  await loadGoogleIdentity();
+  return new Promise((resolve, reject) => {
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: scopes,
+      callback: async response => {
+        if (response.error) return reject(new Error(response.error_description || response.error));
+        activeToken = response.access_token;
+        tokenExpiresAt = Date.now() + Math.max(0, Number(response.expires_in || 0) - 60) * 1000;
+        try {
+          const user = await request(USERINFO_API, activeToken).then(r => r.json());
+          if (!user.sub) throw new Error("شناسه پایدار حساب گوگل دریافت نشد.");
+          const accountFingerprint = await sha256Hex(user.sub);
+          resolve({ accountFingerprint, expiresAt: tokenExpiresAt });
+        } catch (error) {
+          activeToken = null;
+          tokenExpiresAt = 0;
+          reject(error);
+        }
+      },
+      error_callback: error => reject(new Error(error.message || "ورود گوگل لغو شد."))
+    });
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  });
+}
+
+export function getAccessToken() {
+  if (!activeToken || Date.now() >= tokenExpiresAt) throw new Error("نشست گوگل منقضی شده؛ دوباره متصل شو.");
+  return activeToken;
+}
+
+export function disconnectGoogleDrive() {
+  if (activeToken && window.google?.accounts?.oauth2) {
+    window.google.accounts.oauth2.revoke(activeToken, () => {});
+  }
+  activeToken = null;
+  tokenExpiresAt = 0;
+  tokenClient = null;
+}
+
+export async function ensureNoteNestFolder() {
+  const token = getAccessToken();
+  const q = encodeURIComponent("name = 'NoteNest' and mimeType = '" + FOLDER_MIME + "' and 'root' in parents and trashed = false");
+  const found = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,mimeType)&pageSize=100`, token).then(r => r.json());
+  if (found.files?.length) return found.files[0];
+  return request(`${DRIVE_API}/files?fields=id,name,mimeType`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "NoteNest", mimeType: FOLDER_MIME, parents: ["root"] })
+  }).then(r => r.json());
+}
+
+export async function ensureNoteNestFilesFolder(parentFolderId) {
+  if (!parentFolderId) throw new TypeError("شناسه پوشهٔ اصلی معتبر نیست.");
+  const token = getAccessToken();
+  const escapedParentId = parentFolderId.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const q = encodeURIComponent("name = 'files' and mimeType = '" + FOLDER_MIME + "' and '" + escapedParentId + "' in parents and trashed = false");
+  const found = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,mimeType,parents)&pageSize=100`, token).then(r => r.json());
+  if (found.files?.length) return found.files[0];
+  return request(`${DRIVE_API}/files?fields=id,name,mimeType,parents`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "files", mimeType: FOLDER_MIME, parents: [parentFolderId] })
+  }).then(r => r.json());
+}
+
+export async function listNoteNestFiles(folderId) {
+  const token = getAccessToken();
+  const q = encodeURIComponent("'" + folderId.replace(/'/g, "\\'") + "' in parents and trashed = false");
+  const files = [];
+  let pageToken = "";
+  do {
+    const suffix = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
+    const page = await request(`${DRIVE_API}/files?q=${q}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=1000${suffix}`, token).then(r => r.json());
+    files.push(...(page.files || []));
+    pageToken = page.nextPageToken || "";
+  } while (pageToken);
+  return files;
+}
+
+export async function downloadEncryptedFile(fileId) {
+  const token = getAccessToken();
+  return request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, token).then(r => r.arrayBuffer());
+}
+
+export async function uploadEncryptedFile(folderId, fileName, bytes) {
+  if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError("فایل رمزنگاری‌شده خالی است.");
+  const token = getAccessToken();
+  const boundary = "notenest-" + crypto.randomUUID();
+  const metadata = { name: fileName, mimeType: "application/json", parents: [folderId] };
+  const prefix = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`;
+  const suffix = `\r\n--${boundary}--`;
+  const body = new Blob([prefix, bytes, suffix], { type: `multipart/related; boundary=${boundary}` });
+  return request(`${UPLOAD_API}/files?uploadType=multipart&fields=id,name,modifiedTime,parents`, token, {
+    method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body
+  }).then(r => r.json());
+}

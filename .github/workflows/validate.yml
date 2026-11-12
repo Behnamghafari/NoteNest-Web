@@ -1,0 +1,26 @@
+name: Validate NoteNest Web
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax checks
+        run: |
+          node --check app.js
+          node --check sw.js
+          node --check vault-crypto.js
+          node --check drive-config.js
+          node --check google-drive.js
+      - name: Crypto tests
+        run: node --test vault-crypto.test.js
