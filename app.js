@@ -86,7 +86,11 @@ import * as SessionVault from "./session-vault.js";
       vaultKey = key;
       passwordWrappedKey = e.passwordWrappedKey;
       recoveryWrappedKey = e.recoveryWrappedKey;
-      await SessionVault.storeSessionVaultKey(key);
+      try {
+        await SessionVault.storeSessionVaultKey(key);
+      } catch {
+        showToast("این مرورگر امکان نگهداری نشست را نداد؛ ممکن است پس از رفرش دوباره رمز بخواهد.");
+      }
       $("vaultSecret").value = "";
       $("vaultRecoverySecret").value = "";
       revealApp();
@@ -403,13 +407,18 @@ import * as SessionVault from "./session-vault.js";
     $("vaultGateTitle").textContent = "باز کردن یادداشت‌های Drive";
     $("vaultGateDescription").textContent = driveFiles.filter(f => f.name.startsWith("notenest-sync-v1-")).length +
       " بستهٔ همگام‌سازی پیدا شد.";
-    const sessionKey = await SessionVault.restoreSessionVaultKey();
+    let sessionKey = null;
+    try {
+      sessionKey = await SessionVault.restoreSessionVaultKey();
+    } catch {
+      await SessionVault.clearSessionVaultKey();
+    }
     if (sessionKey) {
       try {
         await openVaultWithKey(sessionKey);
         showToast("نشست قبلی بازیابی شد؛ نیازی به ورود دوباره نیست.");
         return;
-      } catch (error) {
+      } catch {
         await SessionVault.clearSessionVaultKey();
         showUnlock();
         gateError("بازیابی نشست قبلی ناموفق بود؛ دوباره رمز خزانه را وارد کن.");
