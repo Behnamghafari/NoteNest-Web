@@ -1,6 +1,7 @@
 import * as VaultCrypto from "./vault-crypto.js";
 import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPES } from "./drive-config.js";
 import * as GoogleDrive from "./google-drive.js";
+import * as SyncBatch from "./vault-sync-batch.js";
 
 (() => {
   "use strict";
@@ -10,7 +11,7 @@ import * as GoogleDrive from "./google-drive.js";
   const PREFS_STORAGE_KEY = "notenest.web.prefs.v1";
   const state = { notes: [], folders: [], filter: "all", folderId: null, activeId: null, dirty: false, dark: false };
   let vaultKey = null, passwordWrappedKey = null, recoveryWrappedKey = null, saveQueue = Promise.resolve();
-  let pendingSetup = null, unlockUsesRecovery = false;
+  let pendingSetup = null, unlockUsesRecovery = false, readOnlyMode = true, driveFiles = [];
   const fa = new Intl.NumberFormat("fa-IR");
   let saveTimer = null, toastTimer = null;
 
@@ -54,10 +55,12 @@ import * as GoogleDrive from "./google-drive.js";
   function showUnlock(){ $("vaultSetupForm").hidden=true;$("vaultUnlockForm").hidden=false;$("vaultGateTitle").textContent="باز کردن خزانه";$("vaultGateDescription").textContent="برای دسترسی به یادداشت‌ها، رمز عبور یا کلید بازیابی را وارد کن."; }
   async function bootstrap(){
     loadPreferences();
-    const stored=localStorage.getItem(VAULT_STORAGE_KEY);
-    if(!stored){importLegacyData();showSetup();}
-    else {try{pendingSetup=JSON.parse(stored);VaultCrypto.validateEnvelope(pendingSetup);showUnlock();}
-      catch{showUnlock();gateError("ساختار خزانه معتبر نیست؛ داده‌ها را حذف نکن.");}}
+    $("vaultSetupForm").hidden=true;
+    $("vaultUnlockForm").hidden=true;
+    $("vaultRecoveryStep").hidden=true;
+    $("vaultGateTitle").textContent="اتصال به دفترچهٔ گوگل‌درایو";
+    $("vaultGateDescription").textContent="این نسخه فقط اطلاعات موجود در Google Drive را می‌خواند؛ برای شروع متصل شو.";
+    $("driveConnect").hidden=false;
     if("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./sw.js").catch(()=>{});
   }
   async function unlockVault(secret){
@@ -65,7 +68,9 @@ import * as GoogleDrive from "./google-drive.js";
     const key=unlockUsesRecovery?await VaultCrypto.unwrapVaultKeyWithRecoveryKey(e.recoveryWrappedKey,secret):await VaultCrypto.unwrapVaultKeyWithPassword(e.passwordWrappedKey,secret);
     try {
       const snapshot=await VaultCrypto.decryptSnapshotDocument(new TextEncoder().encode(JSON.stringify(e)),key);
-      vaultKey=key;passwordWrappedKey=e.passwordWrappedKey;recoveryWrappedKey=e.recoveryWrappedKey;applySnapshot(snapshot);
+      applySnapshot(snapshot);
+      await applyRemoteBatches(key);
+      vaultKey=key;passwordWrappedKey=e.passwordWrappedKey;recoveryWrappedKey=e.recoveryWrappedKey;
       $("vaultSecret").value="";$("vaultRecoverySecret").value="";revealApp();
     } catch(error) { key.fill(0); throw error; }
   }
@@ -130,17 +135,19 @@ import * as GoogleDrive from "./google-drive.js";
   }
   function openEditor(noteId=null) {
     let note=state.notes.find(n=>n.id===noteId);
-    if(!note){const now=Date.now();note={id:id(),title:"",content:"",folderId:state.filter==="folder"?state.folderId:null,favorite:false,createdAt:now,updatedAt:now};state.notes.unshift(note);}
+    if(!note){if(readOnlyMode)return;const now=Date.now();note={id:id(),title:"",content:"",folderId:state.filter==="folder"?state.folderId:null,favorite:false,createdAt:now,updatedAt:now};state.notes.unshift(note);}
     state.activeId=note.id;$("noteTitle").value=note.title;$("noteContent").value=note.content;
+    $("noteTitle").readOnly=readOnlyMode;$("noteContent").readOnly=readOnlyMode;$("noteFolder").disabled=readOnlyMode;
     renderFolderOptions(note.folderId);$("favoriteNote").textContent=note.favorite?"★":"☆";
     $("deleteNote").style.visibility=note.title||note.content?"visible":"hidden";
     $("editorFolderLabel").textContent=folderName(note.folderId);$("editorBackdrop").hidden=false;
     $("saveState").textContent="ذخیره‌شده";updateWordCount();setTimeout(()=>$("noteTitle").focus(),30);
   }
   function closeEditor() {
-    commitEditor();$("editorBackdrop").hidden=true;state.activeId=null;render();
+    if(!readOnlyMode)commitEditor();$("editorBackdrop").hidden=true;state.activeId=null;render();
   }
   function commitEditor() {
+    if(readOnlyMode)return;
     const note=state.notes.find(n=>n.id===state.activeId);if(!note)return;
     note.title=$("noteTitle").value;note.content=$("noteContent").value;note.folderId=$("noteFolder").value||null;note.updatedAt=Date.now();
     $("editorFolderLabel").textContent=folderName(note.folderId);
@@ -148,6 +155,7 @@ import * as GoogleDrive from "./google-drive.js";
     $("deleteNote").style.visibility=note.title||note.content?"visible":"hidden";
   }
   function scheduleSave() {
+    if(readOnlyMode)return;
     $("saveState").textContent="در حال ذخیره…";state.dirty=true;clearTimeout(saveTimer);
     saveTimer=setTimeout(()=>{commitEditor();render();},350);
     updateWordCount();
@@ -161,15 +169,17 @@ import * as GoogleDrive from "./google-drive.js";
     if(placeholder)setTimeout(()=>$("dialogInput").focus(),20);
   }
   function addFolder() {
+    if(readOnlyMode)return;
     askDialog("ساخت پوشه","نامی برای پوشه جدید انتخاب کن.","نام پوشه");
   }
   function deleteActive() {
+    if(readOnlyMode)return;
     const note=state.notes.find(n=>n.id===state.activeId);if(!note)return;
     askDialog("حذف یادداشت","آیا از حذف این یادداشت مطمئنی؟");
   }
   function closeSidebar(){$("sidebar").classList.remove("open");}
   document.querySelectorAll("[data-filter]").forEach(b=>b.addEventListener("click",()=>{state.filter=b.dataset.filter;state.folderId=null;setHeading();render();closeSidebar();}));
-  ["newNote","topNewNote","emptyNewNote"].forEach(idName=>$(idName).addEventListener("click",()=>openEditor()));
+  ["newNote","topNewNote","emptyNewNote"].forEach(idName=>$(idName).addEventListener("click",()=>{if(!readOnlyMode)openEditor();}));
   $("addFolder").addEventListener("click",addFolder);
   $("actionForm").addEventListener("submit",e=>{
     e.preventDefault();const action=e.submitter?.value;$("actionDialog").close();
@@ -187,12 +197,12 @@ import * as GoogleDrive from "./google-drive.js";
   $("editorBackdrop").addEventListener("click",e=>{if(e.target===$("editorBackdrop"))closeEditor();});
   $("noteTitle").addEventListener("input",scheduleSave);$("noteContent").addEventListener("input",scheduleSave);
   $("noteFolder").addEventListener("change",scheduleSave);
-  $("favoriteNote").addEventListener("click",()=>{const n=state.notes.find(x=>x.id===state.activeId);if(!n)return;n.favorite=!n.favorite;$("favoriteNote").textContent=n.favorite?"★":"☆";commitEditor();render();});
+  $("favoriteNote").addEventListener("click",()=>{if(readOnlyMode)return;const n=state.notes.find(x=>x.id===state.activeId);if(!n)return;n.favorite=!n.favorite;$("favoriteNote").textContent=n.favorite?"★":"☆";commitEditor();render();});
   $("deleteNote").addEventListener("click",deleteActive);
   $("searchInput").addEventListener("input",render);$("sortSelect").addEventListener("change",render);
   $("mobileMenu").addEventListener("click",()=>$("sidebar").classList.toggle("open"));
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("editorBackdrop").hidden)closeEditor();if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="n"){e.preventDefault();openEditor();}});
-  $("vaultSetupForm").addEventListener("submit",async e=>{
+  $("vaultSetupForm").addEventListener("submit",async e=>{if(readOnlyMode){e.preventDefault();return;}
     e.preventDefault();$("vaultError").hidden=true;
     const password=$("vaultPassword").value,confirm=$("vaultPasswordConfirm").value;
     if(password.length<10)return gateError("رمز عبور باید دست‌کم ۱۰ نویسه باشد.");
@@ -210,7 +220,7 @@ import * as GoogleDrive from "./google-drive.js";
     }catch(error){gateError("ساخت خزانه ناموفق بود: "+error.message);}
     finally{$("vaultSetupButton").disabled=false;}
   });
-  $("confirmRecoveryForm").addEventListener("submit",async e=>{
+  $("confirmRecoveryForm").addEventListener("submit",async e=>{if(readOnlyMode){e.preventDefault();return;}
     e.preventDefault();$("vaultError").hidden=true;
     if($("recoveryConfirmation").value.trim()!==pendingSetup.recovery.slice(-6))return gateError("۶ نویسهٔ پایانی کلید بازیابی درست نیست.");
     $("confirmRecoveryButton").disabled=true;
@@ -250,6 +260,42 @@ import * as GoogleDrive from "./google-drive.js";
 
   const DRIVE_ACCOUNT_KEY = "notenest.web.drive-account.v1";
   let driveFolderId = null;
+  async function applyRemoteBatches(key) {
+    const batchFiles=driveFiles.filter(f=>f.name.startsWith("notenest-sync-v1-")).sort((a,b)=>a.name.localeCompare(b.name));
+    const batches=[];
+    for(const file of batchFiles){
+      const match=/^notenest-sync-v1-([0-9a-f-]{36})-([1-9][0-9]*)-([1-9][0-9]*)\.json$/i.exec(file.name);
+      if(!match)throw new Error("نام یکی از فایل‌های همگام‌سازی معتبر نیست: "+file.name);
+      const bytes=new Uint8Array(await GoogleDrive.downloadEncryptedFile(file.id));
+      const batch=await SyncBatch.decodeSyncBatch(bytes,key);
+      if(batch.deviceId.toLowerCase()!==match[1].toLowerCase()||batch.firstSequence!==Number(match[2])||batch.lastSequence!==Number(match[3]))throw new Error("مشخصات بسته با نام فایل همخوانی ندارد.");
+      batches.push(batch);
+    }
+    const grouped=new Map();
+    for(const b of batches){if(!grouped.has(b.deviceId))grouped.set(b.deviceId,[]);grouped.get(b.deviceId).push(b);}
+    for(const [device,list] of grouped){
+      list.sort((a,b)=>a.firstSequence-b.firstSequence);
+      let expected=1;
+      for(const batch of list){
+        if(batch.firstSequence!==expected)throw new Error("در زنجیرهٔ همگام‌سازی یک دستگاه، فاصله یا هم‌پوشانی وجود دارد.");
+        expected=batch.lastSequence+1;
+        for(const change of batch.changes){
+          if(change.operation==="delete"){
+            if(change.entityType==="note")state.notes=state.notes.filter(n=>n.id!==change.entitySyncId);
+            else {state.folders=state.folders.filter(f=>f.id!==change.entitySyncId);state.notes.forEach(n=>{if(n.folderId===change.entitySyncId)n.folderId=null;});}
+          }else if(change.entityType==="note"){
+            const p=change.payload, i=state.notes.findIndex(n=>n.id===p.syncId);
+            const item={id:p.syncId,title:p.title,content:p.content,folderId:p.folderSyncId??null,favorite:p.isFavorite===true,createdAt:p.createdAt,updatedAt:p.updatedAt};
+            if(i<0)state.notes.push(item);else if(item.updatedAt>=state.notes[i].updatedAt)state.notes[i]=item;
+          }else{
+            const p=change.payload, i=state.folders.findIndex(f=>f.id===p.syncId);
+            const item={id:p.syncId,name:p.name,parentSyncId:p.parentSyncId??null,createdAt:p.createdAt,updatedAt:p.updatedAt};
+            if(i<0)state.folders.push(item);else if(item.updatedAt>=state.folders[i].updatedAt)state.folders[i]=item;
+          }
+        }
+      }
+    }
+  }
   function updateDriveButton() {
     const button = $("driveConnect");
     const bound = localStorage.getItem(DRIVE_ACCOUNT_KEY);
@@ -267,21 +313,27 @@ import * as GoogleDrive from "./google-drive.js";
         throw new Error("این خزانه به حساب گوگل دیگری متصل است. برای جلوگیری از جابه‌جایی داده‌ها، اتصال مسدود شد.");
       }
       if (!existingBinding) localStorage.setItem(DRIVE_ACCOUNT_KEY, account.accountFingerprint);
-      const rootFolder = await GoogleDrive.ensureNoteNestFolder();
-      const filesFolder = await GoogleDrive.ensureNoteNestFilesFolder(rootFolder.id);
-      driveFolderId = filesFolder.id;
-      const files = await GoogleDrive.listNoteNestFiles(driveFolderId);
-      const vaultExists = files.some(file => file.name === "vault-v1.json");
-      const batches = files.filter(file => file.name.startsWith("notenest-sync-v1-")).length;
-      showToast(vaultExists || batches ? `اتصال برقرار شد؛ ${batches} بستهٔ همگام‌سازی پیدا شد.` : "اتصال برقرار شد؛ پوشهٔ NoteNest آماده است.");
-      button.textContent = "☁ متصل به گوگل درایو";
-      button.title = vaultExists ? "خزانهٔ رمزنگاری‌شده در Drive موجود است." : "پوشه آماده است؛ هنوز خزانه‌ای پیدا نشد.";
+      const rootFolder = await GoogleDrive.findNoteNestFolder();
+      if(!rootFolder)throw new Error("پوشهٔ NoteNest در ریشهٔ گوگل‌درایو پیدا نشد؛ این نسخه پوشه‌ای ایجاد نمی‌کند.");
+      driveFolderId = rootFolder.id;
+      driveFiles = await GoogleDrive.listNoteNestFiles(driveFolderId);
+      const vaultFile=driveFiles.find(file=>file.name==="vault-v1.json");
+      if(!vaultFile)throw new Error("فایل vault-v1.json پیدا نشد. بسته‌های همگام‌سازی به‌تنهایی برای بازکردن کلید رمزنگاری کافی نیستند.");
+      const vaultBytes=new Uint8Array(await GoogleDrive.downloadEncryptedFile(vaultFile.id));
+      pendingSetup=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(vaultBytes));
+      VaultCrypto.validateEnvelope(pendingSetup);
+      showUnlock();
+      $("driveConnect").hidden=true;
+      $("vaultGateTitle").textContent="باز کردن یادداشت‌های Drive";
+      $("vaultGateDescription").textContent=driveFiles.filter(f=>f.name.startsWith("notenest-sync-v1-")).length+" بستهٔ همگام‌سازی پیدا شد. رمز خزانه یا کلید بازیابی را وارد کن.";
+      showToast("فایل خزانه و بسته‌های همگام‌سازی دریافت شد.");
     } catch (error) {
       showToast(error?.message || "اتصال به گوگل درایو ناموفق بود.");
       updateDriveButton();
     } finally { button.disabled = false; }
   });
   updateDriveButton();
+  $("newNote").hidden=true;$("topNewNote").hidden=true;$("emptyNewNote").hidden=true;$("addFolder").hidden=true;$("favoriteNote").hidden=true;$("deleteNote").hidden=true;$("noteTitle").readOnly=true;$("noteContent").readOnly=true;$("noteFolder").disabled=true;
 
   bootstrap();
 })();
