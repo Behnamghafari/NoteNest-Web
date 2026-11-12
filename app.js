@@ -261,37 +261,84 @@ import * as SyncBatch from "./vault-sync-batch.js";
   const DRIVE_ACCOUNT_KEY = "notenest.web.drive-account.v1";
   let driveFolderId = null;
   async function applyRemoteBatches(key) {
-    const batchFiles=driveFiles.filter(f=>f.name.startsWith("notenest-sync-v1-")).sort((a,b)=>a.name.localeCompare(b.name));
-    const batches=[];
-    for(const file of batchFiles){
-      const match=/^notenest-sync-v1-([0-9a-f-]{36})-([1-9][0-9]*)-([1-9][0-9]*)\.json$/i.exec(file.name);
-      if(!match)throw new Error("نام یکی از فایل‌های همگام‌سازی معتبر نیست: "+file.name);
-      const bytes=new Uint8Array(await GoogleDrive.downloadEncryptedFile(file.id));
-      const batch=await SyncBatch.decodeSyncBatch(bytes,key);
-      if(batch.deviceId.toLowerCase()!==match[1].toLowerCase()||batch.firstSequence!==Number(match[2])||batch.lastSequence!==Number(match[3]))throw new Error("مشخصات بسته با نام فایل همخوانی ندارد.");
-      batches.push(batch);
+    const batchFiles = driveFiles
+      .filter(file => file.name.startsWith("notenest-sync-v1-"))
+      .map(file => {
+        const match = /^notenest-sync-v1-([0-9a-f-]{36})-([1-9][0-9]*)-([1-9][0-9]*)\\.json$/i.exec(file.name);
+        if (!match) throw new Error("نام یکی از فایل‌های همگام‌سازی معتبر نیست: " + file.name);
+        return { file, deviceId: match[1].toLowerCase(), first: Number(match[2]), last: Number(match[3]) };
+      })
+      .sort((a,b) => a.deviceId.localeCompare(b.deviceId) || a.first-b.first);
+
+    const batchesByDevice = new Map();
+    for (const entry of batchFiles) {
+      const bytes = new Uint8Array(await GoogleDrive.downloadEncryptedFile(entry.file.id));
+      const batch = await SyncBatch.decodeSyncBatch(bytes, key);
+      if (batch.deviceId.toLowerCase() !== entry.deviceId ||
+          batch.firstSequence !== entry.first || batch.lastSequence !== entry.last) {
+        throw new Error("مشخصات بسته با نام فایل همخوانی ندارد.");
+      }
+      if (!batchesByDevice.has(batch.deviceId)) batchesByDevice.set(batch.deviceId, []);
+      batchesByDevice.get(batch.deviceId).push(batch);
     }
-    const grouped=new Map();
-    for(const b of batches){if(!grouped.has(b.deviceId))grouped.set(b.deviceId,[]);grouped.get(b.deviceId).push(b);}
-    for(const [device,list] of grouped){
+
+    // Keep per-entity revisions, including tombstones, so an older batch cannot
+    // resurrect a deleted note or overwrite a newer edit from another device.
+    const revisions = new Map();
+    const entityKey = (type, syncId) => type + ":" + syncId;
+    const compareRevision = (a,b) =>
+      a.updatedAt !== b.updatedAt ? (a.updatedAt < b.updatedAt ? -1 : 1) :
+      a.deviceId !== b.deviceId ? (a.deviceId < b.deviceId ? -1 : 1) :
+      a.changeId === b.changeId ? 0 : (a.changeId < b.changeId ? -1 : 1);
+
+    // Snapshot v1 has no revision ledger. Treat its records as baseline revisions.
+    for (const note of state.notes) revisions.set(entityKey("note", note.id), {
+      updatedAt: note.updatedAt, deviceId: "", changeId: ""
+    });
+    for (const folder of state.folders) revisions.set(entityKey("folder", folder.id), {
+      updatedAt: folder.updatedAt, deviceId: "", changeId: ""
+    });
+
+    for (const [deviceId, list] of [...batchesByDevice.entries()].sort(([a],[b])=>a.localeCompare(b))) {
       list.sort((a,b)=>a.firstSequence-b.firstSequence);
-      let expected=1;
-      for(const batch of list){
-        if(batch.firstSequence!==expected)throw new Error("در زنجیرهٔ همگام‌سازی یک دستگاه، فاصله یا هم‌پوشانی وجود دارد.");
-        expected=batch.lastSequence+1;
-        for(const change of batch.changes){
-          if(change.operation==="delete"){
-            if(change.entityType==="note")state.notes=state.notes.filter(n=>n.id!==change.entitySyncId);
-            else {state.folders=state.folders.filter(f=>f.id!==change.entitySyncId);state.notes.forEach(n=>{if(n.folderId===change.entitySyncId)n.folderId=null;});}
-          }else if(change.entityType==="note"){
-            const p=change.payload, i=state.notes.findIndex(n=>n.id===p.syncId);
-            const item={id:p.syncId,title:p.title,content:p.content,folderId:p.folderSyncId??null,favorite:p.isFavorite===true,createdAt:p.createdAt,updatedAt:p.updatedAt};
-            if(i<0)state.notes.push(item);else if(item.updatedAt>=state.notes[i].updatedAt)state.notes[i]=item;
-          }else{
-            const p=change.payload, i=state.folders.findIndex(f=>f.id===p.syncId);
-            const item={id:p.syncId,name:p.name,parentSyncId:p.parentSyncId??null,createdAt:p.createdAt,updatedAt:p.updatedAt};
-            if(i<0)state.folders.push(item);else if(item.updatedAt>=state.folders[i].updatedAt)state.folders[i]=item;
+      let expected = 1;
+      for (const batch of list) {
+        if (batch.firstSequence !== expected) {
+          throw new Error("در زنجیرهٔ همگام‌سازی دستگاه " + deviceId + " فاصله یا هم‌پوشانی شماره‌ها وجود دارد.");
+        }
+        expected = batch.lastSequence + 1;
+        for (const change of batch.changes) {
+          const key = entityKey(change.entityType, change.entitySyncId);
+          const incoming = change.revision;
+          const current = revisions.get(key);
+          if (current && compareRevision(incoming, current) <= 0) continue;
+
+          if (change.operation === "delete") {
+            if (change.entityType === "note") {
+              state.notes = state.notes.filter(note => note.id !== change.entitySyncId);
+            } else {
+              state.folders = state.folders.filter(folder => folder.id !== change.entitySyncId);
+              state.notes.forEach(note => { if (note.folderId === change.entitySyncId) note.folderId = null; });
+              state.folders.forEach(folder => { if (folder.parentSyncId === change.entitySyncId) folder.parentSyncId = null; });
+            }
+            revisions.set(key, incoming);
+            continue;
           }
+
+          const p = change.payload;
+          if (change.entityType === "note") {
+            const index = state.notes.findIndex(note => note.id === p.syncId);
+            const item = { id:p.syncId, title:p.title, content:p.content,
+              folderId:p.folderSyncId ?? null, favorite:p.isFavorite === true,
+              createdAt:p.createdAt, updatedAt:p.updatedAt };
+            if (index < 0) state.notes.push(item); else state.notes[index] = item;
+          } else {
+            const index = state.folders.findIndex(folder => folder.id === p.syncId);
+            const item = { id:p.syncId, name:p.name, parentSyncId:p.parentSyncId ?? null,
+              createdAt:p.createdAt, updatedAt:p.updatedAt };
+            if (index < 0) state.folders.push(item); else state.folders[index] = item;
+          }
+          revisions.set(key, incoming);
         }
       }
     }
