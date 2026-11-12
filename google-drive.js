@@ -50,11 +50,53 @@ async function request(url, token, options = {}) {
   return response;
 }
 
-export async function connectGoogleDrive(clientId, scopes, { prompt = "consent" } = {}) {
+const SESSION_TOKEN_KEY = "notenest.web.drive-token.v1";
+
+function restoreSessionToken() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SESSION_TOKEN_KEY) || "null");
+    if (!saved || typeof saved.accessToken !== "string" ||
+        !Number.isFinite(saved.expiresAt) || saved.expiresAt <= Date.now()) {
+      sessionStorage.removeItem(SESSION_TOKEN_KEY);
+      return false;
+    }
+    activeToken = saved.accessToken;
+    tokenExpiresAt = saved.expiresAt;
+    return true;
+  } catch {
+    sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    return false;
+  }
+}
+
+function clearSessionToken() {
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  activeToken = null;
+  tokenExpiresAt = 0;
+}
+
+export async function connectGoogleDrive(clientId, scopes, {
+  prompt = "consent",
+  reuseSession = true,
+  allowInteractive = true
+} = {}) {
   if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) {
     throw new Error("شناسه OAuth وب معتبر نیست. Client ID را در drive-config.js تنظیم کن.");
   }
   await loadGoogleIdentity();
+  if (reuseSession && restoreSessionToken()) {
+    try {
+      const user = await request(USERINFO_API, activeToken).then(r => r.json());
+      if (!user.sub) throw new Error("شناسه حساب گوگل دریافت نشد.");
+      return { accountFingerprint: await sha256Hex(user.sub), expiresAt: tokenExpiresAt, reused: true };
+    } catch (error) {
+      clearSessionToken();
+      if (!allowInteractive) throw new Error("نشست اتصال گوگل منقضی شده؛ برای اتصال دوباره دکمه را بزن.");
+    }
+  }
+  if (!allowInteractive) {
+    throw new Error("برای اتصال دوباره به گوگل، دکمهٔ اتصال را بزن.");
+  }
   return new Promise((resolve, reject) => {
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
@@ -64,13 +106,18 @@ export async function connectGoogleDrive(clientId, scopes, { prompt = "consent" 
         activeToken = response.access_token;
         tokenExpiresAt = Date.now() + Math.max(0, Number(response.expires_in || 0) - 60) * 1000;
         try {
+          sessionStorage.setItem(SESSION_TOKEN_KEY, JSON.stringify({
+            accessToken: activeToken,
+            expiresAt: tokenExpiresAt
+          }));
+        } catch {}
+        try {
           const user = await request(USERINFO_API, activeToken).then(r => r.json());
           if (!user.sub) throw new Error("شناسه پایدار حساب گوگل دریافت نشد.");
           const accountFingerprint = await sha256Hex(user.sub);
           resolve({ accountFingerprint, expiresAt: tokenExpiresAt });
         } catch (error) {
-          activeToken = null;
-          tokenExpiresAt = 0;
+          clearSessionToken();
           reject(error);
         }
       },
@@ -89,8 +136,7 @@ export function disconnectGoogleDrive() {
   if (activeToken && window.google?.accounts?.oauth2) {
     window.google.accounts.oauth2.revoke(activeToken, () => {});
   }
-  activeToken = null;
-  tokenExpiresAt = 0;
+  clearSessionToken();
   tokenClient = null;
 }
 
