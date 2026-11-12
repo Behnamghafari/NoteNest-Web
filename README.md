@@ -11,7 +11,8 @@ A local-first browser client for NoteNest with an encrypted local vault.
 - AES-256-GCM encrypted snapshot storage using the Android Vault v1 format
 - Password unlock and recovery-key unlock
 - Explicit lock action; vault key remains in memory only while unlocked
-- Migration of the earlier local-only notes into the encrypted vault during setup\n- Isolated Android-compatible incremental sync v1 batch codec and validation (not yet connected to Drive sync)
+- Migration of the earlier local-only notes into the encrypted vault during setup
+- Isolated Android-compatible incremental sync v1 batch codec and validation (not yet connected to Drive sync)
 
 ## Security model and limitations
 - Note content and folder metadata are stored as an encrypted Vault v1 document in browser localStorage. Password-wrapped and recovery-wrapped vault keys remain in the envelope; the raw vault key and password are not persisted.
@@ -23,14 +24,22 @@ A local-first browser client for NoteNest with an encrypted local vault.
 - The earlier prototype stored notes without encryption. If such local data exists, setup imports it into the encrypted vault and removes the old plaintext storage only after the encrypted write succeeds. Until setup is completed, old prototype data remains in that browser's localStorage.
 - Do not use this browser milestone as the only copy of important data until backup and cross-device sync are available.
 
-## Google Drive integration (in progress)\n- Uses Google's official Identity Services token client with a Web OAuth client ID; no client secret is shipped to the browser.\n- Requests the same `drive.file`, `openid`, and `profile` scopes as Android. The token remains in memory only; a SHA-256 account fingerprint is stored locally to prevent accidental account switching.\n- The Google Identity Services library is loaded from Google's official origin when the user chooses Connect. This is the only external authentication runtime dependency.\n- This branch currently authenticates and locates/creates `My Drive/NoteNest`, then inventories encrypted vault and sync-batch files. It does **not** upload, overwrite, merge, or restore note data yet.\n- The incremental protocol v1 codec is isolated in `vault-sync-batch.js`; it validates and encrypts/decrypts batches but is not wired into Drive operations or note mutation flows. Conflict handling, tombstones, and local/shared privacy rules remain future work.\n\n## Validation
+## Google Drive integration (in progress)
+- Uses Google's official Identity Services token client with a Web OAuth client ID; no client secret is shipped to the browser.
+- Requests the same `drive.file`, `openid`, and `profile` scopes as Android. The token remains in memory only; a SHA-256 account fingerprint is stored locally to prevent accidental account switching.
+- The Google Identity Services library is loaded from Google's official origin when the user chooses Connect. This is the only external authentication runtime dependency.
+- This branch currently authenticates and locates/creates `My Drive/NoteNest`, then inventories encrypted vault and sync-batch files. It does **not** upload, overwrite, merge, or restore note data yet.
+- The incremental protocol v1 codec is isolated in `vault-sync-batch.js`; it validates and encrypts/decrypts batches but is not wired into Drive operations or note mutation flows. Conflict handling, tombstones, and local/shared privacy rules remain future work.
+
+## Validation
 Run from the repository root:
 
 ```sh
 node --check app.js
 node --check sw.js
 node --check vault-crypto.js
-node --test vault-crypto.test.js\nnode --test vault-sync-batch.test.js
+node --test vault-crypto.test.js
+node --test vault-sync-batch.test.js
 ```
 
 ## Hosting
