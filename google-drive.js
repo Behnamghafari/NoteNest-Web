@@ -76,7 +76,7 @@ function clearSessionToken() {
 }
 
 export async function connectGoogleDrive(clientId, scopes, {
-  prompt = "consent",
+  prompt = "",
   reuseSession = true,
   allowInteractive = true
 } = {}) {
